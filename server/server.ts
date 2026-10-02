@@ -94,7 +94,20 @@ if (!API_KEY) {
 }
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
-const wss = new WebSocketServer({ port: PORT });
+// Local hardening: whoever connects can switch Claude to `bypassPermissions`, so the
+// relay listens on loopback unless HOST says otherwise (Tailscale serve still reaches
+// it), and refuses any handshake carrying an Origin header — browsers always send one,
+// so a web page cannot drive Claude through ws://localhost. The iOS app sends none.
+const HOST = process.env['HOST'] ?? '127.0.0.1';
+const wss = new WebSocketServer({
+  host: HOST,
+  port: PORT,
+  verifyClient: ({ req }: { req: import('node:http').IncomingMessage }) => {
+    if (!req.headers.origin) return true;
+    console.error(`refused a connection with Origin ${req.headers.origin}`);
+    return false;
+  },
+});
 let nextId = 1;
 
 // The chat list with the one fact only this process knows on it: which chats Claude
@@ -262,7 +275,7 @@ wss.on('listening', () => {
   // nobody copies an address out of System Settings or remembers a ts.net name.
   void reach(PORT).then((r) => {
     console.log(`  simulator    ${r.simulator}`);
-    if (r.wifi) console.log(`  same Wi-Fi   ${r.wifi}`);
+    if (r.wifi) console.log(`  same Wi-Fi   ${HOST === '127.0.0.1' || HOST === 'localhost' ? `off — listening on ${HOST}; HOST=0.0.0.0 exposes it to the LAN, unauthenticated` : r.wifi}`);
     console.log(`  anywhere     ${r.anywhere}`);
     console.log(`  stt ${STT_MODEL}  ·  voice ${VOICE_MODEL}`);
   });

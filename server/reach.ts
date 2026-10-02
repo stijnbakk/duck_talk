@@ -102,12 +102,12 @@ async function tailnet(port: number): Promise<string> {
     if (await listening(behind)) {
       return `wss://${host} opens onto :${behind}, where another relay is running — stop it, or serve this port`;
     }
-    try {
+    // Local hardening: never rewrite this Mac's Tailscale serve config unasked.
+    if (process.env['DUCK_TALK_TAILSCALE_REPOINT'] === '1') try {
       await run('tailscale', ['serve', '--bg', String(port)], { timeout: 5_000 });
       return `wss://${host}  (repointed from :${behind}, where nothing was listening)`;
-    } catch {
-      return `wss://${host} opens onto :${behind}, where nothing is listening — run:  tailscale serve --bg ${port}`;
-    }
+    } catch { /* reported below */ }
+    return `wss://${host} opens onto :${behind}, where nothing is listening — run:  tailscale serve --bg ${port}`;
   }
   return `run once on this Mac:  tailscale serve --bg ${port}`;
 }
