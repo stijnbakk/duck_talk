@@ -39,6 +39,8 @@ struct ContentView: View {
     /// Client-only, so unlike the three above it never travels — see `AudioPipe.output`.
     /// Persisted, because it is set once for a meeting and should hold across sessions.
     @AppStorage("output") private var output = true
+    /// The chime loop while Claude works — off unless asked for. See `AudioPipe.filler`.
+    @AppStorage("filler") private var filler = false
     private let session = VoiceSession.shared
     @State private var draft = ""
     /// The instruction the relay is holding for review, as you may have edited it.
@@ -180,6 +182,7 @@ struct ContentView: View {
         // Client-only, so it reaches the session directly rather than riding a frame —
         // and mid-reply, so switching it off silences what is playing.
         .task(id: output) { session.output = output }
+        .task(id: filler) { session.filler = filler }
         // Watch the chat on screen whenever the relay says it is working and nothing
         // here is already attached to it. Declarative on purpose: the relay's word
         // replaces the guess this used to make with a three-second timer, and coming
@@ -693,6 +696,7 @@ struct ContentView: View {
             Button { sheet = .corrections(nil) } label: { Label("Corrections", systemImage: "text.badge.checkmark") }
             Toggle(isOn: $autocorrect) { Label("Auto-correct", systemImage: "wand.and.stars") }
                 .disabled(live)
+            Toggle(isOn: $filler) { Label("Wachtgeluid", systemImage: "bell") }
             Divider()
             Button { sheet = .server } label: { Label("Server", systemImage: "network") }
         } label: {

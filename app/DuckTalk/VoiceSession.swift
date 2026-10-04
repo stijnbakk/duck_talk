@@ -144,6 +144,11 @@ final class VoiceSession {
         didSet { pipe?.output = output }
     }
 
+    /// The filler chimes, on or off — handed in the same way. See `AudioPipe.filler`.
+    var filler = false {
+        didSet { pipe?.filler = filler }
+    }
+
     // MARK: - The one socket
 
     private var socket: URLSessionWebSocketTask?
@@ -331,6 +336,7 @@ final class VoiceSession {
     private func startMic() async {
         let pipe = AudioPipe()
         pipe.output = output
+        pipe.filler = filler
         pipe.onLevel = { [weak self] l in Task { @MainActor in self?.level = l } }
         // What the speaker really played — the relay's only way to tell a reply that
         // was heard from one that was cut off. Sent when it runs dry.

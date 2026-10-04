@@ -38,6 +38,12 @@ final class AudioPipe {
         didSet { settle() }
     }
 
+    /// Whether a wait sounds at all — the Wachtgeluid setting. Off, `waiting` still
+    /// flips for the life of the turn and nothing chimes.
+    var filler = false {
+        didSet { settle() }
+    }
+
     /// Reply buffers scheduled and not yet heard — the speaker is dry at zero.
     /// `.dataPlayedBack` in `play` is the native event for "this buffer has been
     /// played to the speaker", so dryness is the hardware's own bookkeeping, never
@@ -84,7 +90,7 @@ final class AudioPipe {
     /// the bit flipping, a buffer arriving, a buffer playing out — lands here, and a
     /// timer that fires into a changed world just falls through the same guards.
     private func settle() {
-        guard waiting, output, queued == 0 else { return chime(false) }
+        guard waiting, filler, output, queued == 0 else { return chime(false) }
         let dry = Date().timeIntervalSince(dryAt)
         if dry >= Self.lull { return chime(true) }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.lull - dry) { [weak self] in self?.settle() }
