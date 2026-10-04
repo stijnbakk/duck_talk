@@ -20,27 +20,28 @@ final class AudioPipe {
     /// arriving and are consumed on the spot, so `playedMs` still grows and the relay
     /// still hears "the reply is over" the moment it is; it goes on synthesising into a
     /// listener who is not listening, exactly as it goes on hearing a muted room. The
-    /// chimes are off too: a wait nobody will hear the end of needs no sound.
+    /// pad is off too: a wait nobody will hear the end of needs no sound.
     var output = true {
         didSet { if !output { flush() } else { settle() } }
     }
 
     /// A reply is owed: a turn is provably running and not yet over. VoiceSession
     /// flips this for the life of the turn — one bit, the same shape as `muted` —
-    /// and this file decides what the wait *sounds* like: the chime loop, but only
-    /// while the speaker is dry. The speaker is the one thing that truly knows
-    /// whether anything is playing, so the chimes cover the head of the turn, fall
-    /// silent the instant reply audio exists, and come back when the voice runs out
-    /// mid-turn because Claude went back to its tools — the long quiet the filler
-    /// exists for. The same echo cancellation that keeps the reply's voice out of
-    /// the microphone keeps the chimes out of it.
+    /// and this file decides what the wait *sounds* like: the pad, but only while
+    /// the speaker is dry. The speaker is the one thing that truly knows whether
+    /// anything is playing, so the pad covers the head of the turn, ebbs away the
+    /// instant reply audio exists, and comes back when the voice runs out mid-turn
+    /// because Claude went back to its tools — the long quiet the filler exists for.
+    /// The same echo cancellation that keeps the reply's voice out of the microphone
+    /// keeps the pad out of it; what is left of it is a low, steady tone well under
+    /// a voice, which is nothing speech detection mistakes for words.
     var waiting = false {
         didSet { settle() }
     }
 
     /// Whether a wait sounds at all — the Wachtgeluid setting. Off, `waiting` still
-    /// flips for the life of the turn and nothing chimes.
-    var filler = false {
+    /// flips for the life of the turn and nothing plays.
+    var filler = true {
         didSet { settle() }
     }
 
@@ -79,51 +80,79 @@ final class AudioPipe {
     /// A new reply is coming, so forget what the last one played.
     func expectReply() { playedMs = 0 }
 
-    /// When the speaker last ran dry. A lull has to last before it chimes: the
-    /// serial voice can starve for tens of milliseconds between sentences, and a
-    /// chime in a seam that short would sound inside the reply's own breath.
+    /// When the speaker last ran dry. A lull has to last before the pad comes in:
+    /// the serial voice can starve for tens of milliseconds between sentences, and a
+    /// pad in a seam that short would sound inside the reply's own breath.
     private var dryAt = Date.distantPast
     private static let lull: TimeInterval = 2
 
-    /// Chime if the wait is on and the speaker has been dry long enough; otherwise
-    /// stop. Re-checked, not scheduled once: every path that changes the answer —
-    /// the bit flipping, a buffer arriving, a buffer playing out — lands here, and a
-    /// timer that fires into a changed world just falls through the same guards.
+    /// How long the microphone must have heard no voice before the pad comes in —
+    /// the knob for "too soon" and "too late". A thinking pause mid-sentence runs a
+    /// second or three and must pass in silence; a turn can begin inside one, since
+    /// endpointing cannot tell a pause from an ending, so the bit flipping is not
+    /// enough on its own. Five seconds of quiet is past nearly every pause and still
+    /// well before a wait on Claude starts to feel like the line went dead.
+    private static let quietBeforePad: TimeInterval = 5
+
+    /// The last time the microphone heard a voice: louder than `speechDb`, which is
+    /// well above the meter's floor so a quiet room — or what echo cancellation leaves
+    /// of the pad itself — never counts as one. Written on the audio thread and read
+    /// on the main one, like `lastLoudAt`.
+    private var spokeAt = Date.distantPast
+    private static let speechDb: Float = -45
+
+    /// Pad if the wait is on, the speaker has been dry long enough and nobody has
+    /// spoken for long enough; otherwise stop. Re-checked, not scheduled once: every
+    /// path that changes the answer — the bit flipping, a buffer arriving, a buffer
+    /// playing out, a voice under the pad — lands here, and a timer that fires into a
+    /// changed world just falls through the same guards.
     private func settle() {
-        guard waiting, filler, output, queued == 0 else { return chime(false) }
-        let dry = Date().timeIntervalSince(dryAt)
-        if dry >= Self.lull { return chime(true) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.lull - dry) { [weak self] in self?.settle() }
+        guard waiting, filler, output, queued == 0 else { return pad(false) }
+        let now = Date()
+        let wait = max(Self.lull - now.timeIntervalSince(dryAt), Self.quietBeforePad - now.timeIntervalSince(spokeAt))
+        if wait <= 0 { return pad(true) }
+        pad(false) // not yet, or no longer: a voice under the pad starts the quiet over
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in self?.settle() }
     }
 
-    /// The loop itself, faded at both edges so neither is a click.
-    private var chiming = false
-    private func chime(_ on: Bool) {
-        guard on != chiming, let chimes else { return }
-        chiming = on
+    /// The loop itself, faded slowly at both edges so it is never switched, only
+    /// swelling and ebbing: in like the room going quietly on rather than something
+    /// starting, out like it settling — under a reply arriving, or a voice that
+    /// came back, which the pad sits far enough below to be heard over as it goes.
+    private var sounding = false
+    /// Which fade is the latest, so an old fade-out's pause cannot cut a newer one.
+    private var fade = 0
+    private func pad(_ on: Bool) {
+        guard on != sounding, let loop else { return }
+        sounding = on
+        fade &+= 1
         if on {
-            chimes.currentTime = 0
-            chimes.volume = 0
-            chimes.play()
-            chimes.setVolume(Self.chimeVolume, fadeDuration: 0.4)
+            // Caught mid-ebb, it swells back from where it is; only a stopped loop
+            // starts over, at its own quiet beginning.
+            if !loop.isPlaying {
+                loop.currentTime = 0
+                loop.volume = 0
+                loop.play()
+            }
+            loop.setVolume(1, fadeDuration: Self.fadeIn)
         } else {
-            chimes.setVolume(0, fadeDuration: 0.15)
-            // Paused only once the fade has played out — and not at all if a new
-            // lull began during it, which the volume ramp then serves.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                if self?.chiming != true { chimes.pause() }
+            loop.setVolume(0, fadeDuration: Self.fadeOut)
+            let mine = fade
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.fadeOut + 0.1) { [weak self] in
+                if self?.fade == mine { loop.pause() }
             }
         }
     }
 
-    /// Quiet on purpose: the chimes sit under a voice about to speak, never in place
-    /// of one. The file itself peaks well below full scale for the same reason.
-    private static let chimeVolume: Float = 0.5
+    private static let fadeIn: TimeInterval = 4
+    private static let fadeOut: TimeInterval = 2.5
 
-    /// The loop, from the bundle — written by scripts/filler-sound.py, never by hand.
-    /// Nil only if the resource is missing, and then a wait is simply silent.
-    private lazy var chimes: AVAudioPlayer? = {
-        guard let url = Bundle.main.url(forResource: "chimes", withExtension: "wav"),
+    /// The pad, from the bundle — written by scripts/filler-sound.py, never by hand.
+    /// Its level is the file's: quiet on purpose, it sits under a voice about to
+    /// speak, never in place of one. Nil only if the resource is missing, and then a
+    /// wait is simply silent.
+    private lazy var loop: AVAudioPlayer? = {
+        guard let url = Bundle.main.url(forResource: "pad", withExtension: "wav"),
               let player = try? AVAudioPlayer(contentsOf: url) else { return nil }
         player.numberOfLoops = -1
         return player
@@ -312,9 +341,9 @@ final class AudioPipe {
         let frames = AVAudioFrameCount(pcm.count / 2)
         // Output off: consumed on the spot, and in every respect a buffer that played
         // out — counted, reported, and the speaker dry as of *now*. Through `drained`
-        // rather than a bare report, because dryness is what the chimes read: stamped
+        // rather than a bare report, because dryness is what the pad reads: stamped
         // only at the flush that switched output off, the speaker looked dry for the
-        // whole time it was consuming, and switching back on chimed until the next
+        // whole time it was consuming, and switching back on played the pad until the next
         // chunk landed.
         guard output else { playedMs += Double(frames) / 24; drained(); return }
         guard frames > 0, let buffer = AVAudioPCMBuffer(pcmFormat: speakerFormat, frameCapacity: frames) else { return }
@@ -390,6 +419,11 @@ final class AudioPipe {
         vDSP_maxmgv(scratch, 1, &peak, vDSP_Length(count))
         let db = 20 * log10f(max(peak / 32768, 1e-7))
         if db > Self.floorDb { lastLoudAt = Date().timeIntervalSince1970 * 1000 }
+        if db > Self.speechDb {
+            spokeAt = Date()
+            // A voice under the pad ebbs it away; nothing else would say so in time.
+            if sounding { DispatchQueue.main.async { [weak self] in self?.settle() } }
+        }
         let target = min(1, max(0, (db - Self.floorDb) / (Self.ceilingDb - Self.floorDb)))
         level += (target - level) * (target > level ? Self.attack : Self.release)
         return level
@@ -446,7 +480,7 @@ final class AudioPipe {
     func stop() {
         watching.forEach(NotificationCenter.default.removeObserver)
         watching.removeAll()
-        waiting = false // fades the chimes out with the session, if they were playing
+        waiting = false // fades the pad out with the session, if it was playing
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()

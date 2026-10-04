@@ -136,7 +136,7 @@ final class VoiceSession {
     /// Set by the screen; a change reconnects, since a socket is one of these.
     var url: URL? { didSet { if url != oldValue { drop(); reconcile() } } }
 
-    /// The speaker, on or off — the spoken reply and the filler chimes together. Handed
+    /// The speaker, on or off — the spoken reply and the waiting pad together. Handed
     /// in like the model choice so this class reads no settings. Off takes effect
     /// mid-reply: what the speaker holds is dropped, and what still arrives is consumed
     /// unplayed — see `AudioPipe.output`.
@@ -144,8 +144,8 @@ final class VoiceSession {
         didSet { pipe?.output = output }
     }
 
-    /// The filler chimes, on or off — handed in the same way. See `AudioPipe.filler`.
-    var filler = false {
+    /// The waiting pad, on or off — handed in the same way. See `AudioPipe.filler`.
+    var filler = true {
         didSet { pipe?.filler = filler }
     }
 
@@ -538,7 +538,7 @@ final class VoiceSession {
         return attached.map(Piece.init)
     }
 
-    /// A turn is in flight, or over — and while one is, the filler chimes cover
+    /// A turn is in flight, or over — and while one is, the waiting pad covers
     /// whatever the speaker has nothing to play for. On means proof, never prediction:
     /// asserted only by a sign of work arriving, so a turn that provably runs is
     /// guaranteed a closer. AudioPipe decides whether the wait *sounds* right now.

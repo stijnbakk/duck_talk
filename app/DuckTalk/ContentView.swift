@@ -35,12 +35,14 @@ struct ContentView: View {
     /// the levels a model actually takes come down the socket with the model list.
     @AppStorage("effort") private var effort = "default"
     @AppStorage("autocorrect") private var autocorrect = false
-    /// The speaker: the spoken reply and the chime loop while Claude works, together.
+    /// The speaker: the spoken reply and the waiting pad while Claude works, together.
     /// Client-only, so unlike the three above it never travels — see `AudioPipe.output`.
     /// Persisted, because it is set once for a meeting and should hold across sessions.
     @AppStorage("output") private var output = true
-    /// The chime loop while Claude works — off unless asked for. See `AudioPipe.filler`.
-    @AppStorage("filler") private var filler = false
+    /// The waiting pad while Claude works — on unless switched off. See `AudioPipe.filler`.
+    /// A new key, not "filler": that one holds the old chimes' off, and the pad is
+    /// meant to start out on for everyone.
+    @AppStorage("pad") private var filler = true
     private let session = VoiceSession.shared
     @State private var draft = ""
     /// The instruction the relay is holding for review, as you may have edited it.

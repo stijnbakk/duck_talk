@@ -162,7 +162,7 @@ project edit. Never hand-edit `.pbxproj`.
 The brand is in `Shared/`: `Brand.swift` for the palette, `Brand.xcassets` for the mark
 (`Image("Logo")`) and the `AccentColor` the system tints with. `scripts/app-icon.sh` writes that mark and
 the app icon from the one drawing in `assets/`, so neither is edited by hand — and
-`scripts/filler-sound.py` writes `DuckTalk/Resources/chimes.wav`, the loop the app
+`scripts/filler-sound.py` writes `DuckTalk/Resources/pad.wav`, the loop the app
 plays while a reply is owed, the same way: synthesized from numbers, never edited.
 
 Adding an SPM dependency means editing `project.yml` — ask first, the app is
