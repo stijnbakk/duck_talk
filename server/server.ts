@@ -32,7 +32,9 @@
  * `review` holds it for a yes/no/edit first. Orthogonal to both, `?correct=1` has a
  * fast text model fix the instruction first, from the pairs a review-mode edit
  * taught (`.duck-talk/corrections.jsonl`). `?readback=1` also reads a held instruction aloud,
- * for deciding without looking at the screen. `?resume=<id>` carries on a past chat
+ * for deciding without looking at the screen. `?pause=<ms>` sets how long a pause may
+ * last and still continue the instruction (1–10 s, default 3), and `?ack=1` has the phone
+ * say "got it" once that pause has passed — see ack.ts. `?resume=<id>` carries on a past chat
  * instead of starting one — any session Claude Code has in this project, including
  * the ones you started in a terminal. A resumed chat whose Claude session is still
  * working is *attached to* rather than reopened — see claude.ts — and the running
@@ -140,8 +142,14 @@ wss.on('connection', (ws, req) => {
   // A chat to carry on rather than start. The id came from this relay's own turn
   // records, so it is one Claude Code can resume in this `cwd`.
   const resume = url.searchParams.get('resume') ?? undefined;
+  // The pause window — how long a pause for thought may last and still be the same
+  // instruction — and whether its passing is said out loud ("got it", see ack.ts). Both
+  // are the phone's settings; without them the relay behaves as it always has.
+  const pause = Number(url.searchParams.get('pause'));
+  const pauseMs = Number.isFinite(pause) && pause >= 1000 && pause <= 10_000 ? pause : undefined;
+  const ack = url.searchParams.get('ack') === '1';
   const log = (msg: string) => console.log(`[${id}] ${msg}`);
-  log(`open (${mode}${autocorrect ? ', autocorrect' : ''}${readback ? ', readback' : ''}${resume ? `, resuming ${resume}` : ''})`);
+  log(`open (${mode}${autocorrect ? ', autocorrect' : ''}${readback ? ', readback' : ''}${pauseMs ? `, pause ${pauseMs}ms` : ''}${ack ? ', ack' : ''}${resume ? `, resuming ${resume}` : ''})`);
 
   // `?data=1` edits what the relay owns and nothing else — no Gemini, no Claude — so
   // the phone can open those screens whether or not a session is live. Every message
@@ -242,7 +250,7 @@ wss.on('connection', (ws, req) => {
     pcm: (buf) => { if (ws.readyState === ws.OPEN) ws.send(buf); },
     event: (msg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); },
   };
-  const session = new Session(phone, ai, mode, { sttModel: STT_MODEL, voiceModel: VOICE_MODEL, autocorrect, readback, resume }, log);
+  const session = new Session(phone, ai, mode, { sttModel: STT_MODEL, voiceModel: VOICE_MODEL, autocorrect, readback, resume, pauseMs, ack }, log);
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) session.send(data as Buffer);

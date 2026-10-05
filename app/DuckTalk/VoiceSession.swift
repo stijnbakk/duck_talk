@@ -574,6 +574,12 @@ final class VoiceSession {
         }
     }
 
+    /// The clip a phrase is recorded in — `slug` in server/ack.ts, said again here.
+    private static func ackSlug(_ phrase: String) -> String {
+        let words = phrase.lowercased().split(whereSeparator: { !$0.isLetter || !$0.isASCII })
+        return "ack-" + words.joined(separator: "-")
+    }
+
     private func handle(_ json: String) {
         guard let data = json.data(using: .utf8),
               let event = try? JSONDecoder().decode(Event.self, from: data) else { return }
@@ -671,6 +677,12 @@ final class VoiceSession {
             }
             endToolRun()
             pipe?.flush()
+        case "ack":
+            // "Got it": the pause passed and the instruction is Claude's. Not a line, not
+            // a reply — a sound, said by the pipe from the bundle. Skipping it is only
+            // worth a mark, so the relay's log says why the phone stayed quiet.
+            guard let text = event.text else { break }
+            if let why = pipe?.acknowledge(Self.ackSlug(text)) { mark("ack", note: "skipped: \(why)") }
         case "error":
             error = event.text
         default:

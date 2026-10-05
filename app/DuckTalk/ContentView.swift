@@ -43,6 +43,14 @@ struct ContentView: View {
     /// A new key, not "filler": that one holds the old chimes' off, and the pad is
     /// meant to start out on for everyone.
     @AppStorage("pad") private var filler = true
+    /// "Got it" once the pause after a spoken instruction has passed, before Claude
+    /// answers — see server/ack.ts. Rides the URL, like auto-correct.
+    @AppStorage("ack") private var ack = true
+    /// How long a pause for thought may last and still be the same instruction, in
+    /// seconds. Speech resuming inside it carries the sentence on; once it has passed
+    /// the turn is committed, and that is when "got it" is said. 3 is the relay's own
+    /// default, tuned against how soon a reply can be heard.
+    @AppStorage("pause") private var pause = 3.0
     private let session = VoiceSession.shared
     @State private var draft = ""
     /// The instruction the relay is holding for review, as you may have edited it.
@@ -84,7 +92,8 @@ struct ContentView: View {
     /// being carried on is the session's own business — it appends `resume` itself, so
     /// a turn typed after one spoken lands in the same conversation.
     private var url: URL? {
-        Relay.url(serverURL, query: "?mode=\(mode.rawValue)" + (autocorrect ? "&correct=1" : ""))
+        Relay.url(serverURL, query: "?mode=\(mode.rawValue)" + (autocorrect ? "&correct=1" : "")
+            + "&pause=\(Int(pause * 1000))" + (ack ? "&ack=1" : ""))
     }
 
     var body: some View {
@@ -199,7 +208,7 @@ struct ContentView: View {
         // Where the relay is and how this chat runs. Both ride the socket's URL, so the
         // session reconnects when either changes — which is why the mode capsule is
         // hidden while anything is running.
-        .task(id: "\(serverURL)|\(mode.rawValue)|\(autocorrect)") { session.url = url }
+        .task(id: "\(serverURL)|\(mode.rawValue)|\(autocorrect)|\(pause)|\(ack)") { session.url = url }
         // The home screen's own socket to the relay, held for as long as the screen is
         // up: it is where the model list comes from, where a fork is sent, and — since
         // it is the one connection that is always supposed to be there — what the gear
@@ -692,6 +701,9 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    /// The pause windows offered: from snappy to room for a long thought.
+    private static let pauses: [Double] = [2, 3, 4, 5, 7]
+
     private var settings: some View {
         Menu {
             Button { sheet = .prompts } label: { Label("Prompts", systemImage: "text.bubble") }
@@ -699,6 +711,16 @@ struct ContentView: View {
             Toggle(isOn: $autocorrect) { Label("Auto-correct", systemImage: "wand.and.stars") }
                 .disabled(live)
             Toggle(isOn: $filler) { Label("Wachtgeluid", systemImage: "bell") }
+            Toggle(isOn: $ack) { Label("Bevestiging", systemImage: "checkmark.bubble") }
+                .disabled(live)
+            Picker(selection: $pause) {
+                ForEach(Self.pauses, id: \.self) { Text("\(Int($0)) s").tag($0) }
+            } label: {
+                Label("Denkpauze", systemImage: "timer")
+                Text("\(Int(pause)) s")
+            }
+            .pickerStyle(.menu)
+            .disabled(live)
             Divider()
             Button { sheet = .server } label: { Label("Server", systemImage: "network") }
         } label: {

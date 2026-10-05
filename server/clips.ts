@@ -76,8 +76,8 @@ function prune(): void {
   }
 }
 
-/** 16 kHz mono Int16 PCM with the 44-byte header that makes it a file. */
-export function wav(pcm: Buffer): Buffer {
+/** Mono Int16 PCM with the 44-byte header that makes it a file — 16 kHz unless told. */
+export function wav(pcm: Buffer, rate = RATE): Buffer {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
   header.writeUInt32LE(36 + pcm.length, 4);
@@ -86,8 +86,8 @@ export function wav(pcm: Buffer): Buffer {
   header.writeUInt32LE(16, 16); // PCM header length
   header.writeUInt16LE(1, 20); // uncompressed
   header.writeUInt16LE(1, 22); // mono
-  header.writeUInt32LE(RATE, 24);
-  header.writeUInt32LE(RATE * 2, 28); // bytes per second
+  header.writeUInt32LE(rate, 24);
+  header.writeUInt32LE(rate * 2, 28); // bytes per second
   header.writeUInt16LE(2, 32); // bytes per frame
   header.writeUInt16LE(16, 34); // bits per sample
   header.write('data', 36);

@@ -36,12 +36,13 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { Ack } from './ack.ts';
 import { claim, DEFAULTS, release, type Claude, type ClaudeCallbacks, type PermissionMode } from './claude.ts';
 import { chat } from './chats.ts';
 import { save as saveClip } from './clips.ts';
 import { correct, CORRECT_MODEL } from './correct.ts';
 import { add, load, type Correction } from './corrections.ts';
-import { openEars, keyword, type Ears, type Keyword } from './ears.ts';
+import { JOIN_MS, openEars, keyword, type Ears, type Keyword } from './ears.ts';
 import { save as saveImage } from './images.ts';
 import { append, type Mode, type Turn } from './turns.ts';
 import { openVoice, type Voice } from './voice.ts';
@@ -117,6 +118,12 @@ export class Session {
 
   private corrections: Correction[] = [];
 
+  /** "Got it", once the pause after a spoken instruction has passed — see ack.ts. Null
+   *  when the phone did not ask for one. Its pause is also the ears' JOIN window: the
+   *  turn is committed exactly when speech can no longer take it back. */
+  private readonly ack: Ack | null;
+  private readonly pauseMs: number;
+
   // What this turn was given — pictures and pasted texts — held from the moment they
   // are picked until the turn they belong to is over. Not a field on the frame that
   // starts the turn, because there is no such frame when you speak: the instruction is
@@ -149,10 +156,12 @@ export class Session {
     phone: Phone,
     ai: GoogleGenAI,
     mode: Mode,
-    opts: { sttModel: string; voiceModel: string; autocorrect: boolean; readback: boolean; resume?: string },
+    opts: { sttModel: string; voiceModel: string; autocorrect: boolean; readback: boolean; resume?: string; pauseMs?: number; ack?: boolean },
     log: (m: string) => void,
   ) {
     this.resume = opts.resume;
+    this.pauseMs = opts.pauseMs ?? JOIN_MS;
+    this.ack = opts.ack ? new Ack(this.pauseMs) : null;
     this.phone = phone;
     this.ai = ai;
     this.mode = mode;
@@ -182,7 +191,13 @@ export class Session {
       onPcm: (pcm) => {
         // Only the reply counts as the first byte out; the review readback is read the
         // same way, and stamping it would time the turn from the wrong sound.
-        if (this.state !== 'held') this.turn.voice_out_at ??= Date.now();
+        if (this.state !== 'held' && this.turn.voice_out_at === null) {
+          this.turn.voice_out_at = Date.now();
+          // The reply is being heard, so speech from here on answers it rather than
+          // finishing the instruction — and needs no "got it" in front of it.
+          this.ack?.disarm();
+          this.ears?.seal();
+        }
         this.turn.voice_ms += pcm.length / 48;
         this.phone.pcm(pcm);
       },
@@ -311,6 +326,12 @@ export class Session {
     return openEars(this.ai, this.sttModel, {
       log: this.log,
       onPartial: (text, continuing) => {
+        // Our own "got it", come back through the microphone, is not the user talking:
+        // left alone it would barge in on the very turn it acknowledged.
+        if (this.ack?.echo(text)) return;
+        // Speech resumed, so the pause has not passed: no acknowledgement yet. If this
+        // turns out to continue the instruction, the re-run final arms it again.
+        this.ack?.disarm();
         // Speech during a turn is one of two things, and the ears already know which:
         // `continuing` is their own JOIN decision, so this utterance is the rest of
         // the instruction that started the turn — take the turn back and wait for the
@@ -331,6 +352,13 @@ export class Session {
         this.phone.event({ type: 'user', text, partial: true });
       },
       onFinal: (text, clip) => {
+        if (this.ack?.echo(text)) {
+          this.log(`ignored ack echo: ${text}`);
+          // Ended as a final of its own, the echo would otherwise be the head that the
+          // next real utterance is stitched onto.
+          this.ears?.seal();
+          return;
+        }
         this.turn.heard = text;
         // The clip belongs to the utterance, not to the turn, so it is kept and
         // announced here — with the text it is the sound of, and before anything is
@@ -341,6 +369,7 @@ export class Session {
         // further revision is coming.
         this.phone.event({ type: 'user', text, partial: false, clip: this.turn.clip });
         this.heard(text); // the transcript is the instruction
+        this.acknowledge();
       },
       // Gemini caps a Live session's length and there is no way around it on this
       // model, so losing the ears is a matter of when. The recovery is the open path,
@@ -353,7 +382,27 @@ export class Session {
         if (this.closed) return;
         this.ears = null;
       },
-    }, this.corrections);
+    }, this.corrections, this.pauseMs);
+  }
+
+  /**
+   * Arm the acknowledgement for the turn a spoken final just started — direct mode
+   * only, since review has its card to say the same thing. When it fires it checks the
+   * turn is still that one and still owed a reply nobody has heard yet; anything else
+   * means it is moot, and it says nothing.
+   */
+  private acknowledge(): void {
+    if (!this.ack || this.state !== 'claude' || this.mode !== 'direct') return;
+    const turn = this.turn;
+    this.ack.arm((phrase) => {
+      if (this.turn !== turn || this.state !== 'claude' || this.closed || !this.ears) return false;
+      if (turn.voice_out_at !== null) return false;
+      turn.ack_at = Date.now();
+      turn.ack = phrase;
+      this.log(`ack: ${phrase}`);
+      this.phone.event({ type: 'ack', text: phrase });
+      return true;
+    });
   }
 
   // --- Phone → session -------------------------------------------------------
@@ -477,6 +526,7 @@ export class Session {
     if (this.closed) return;
     this.closed = true;
     this.disarm();
+    this.ack?.disarm();
     if (this.gap) { clearTimeout(this.gap); this.gap = null; }
     // A turn in flight outlives its socket — claude.ts keeps it working — but its
     // record dies with this object, so what is known is written now. The reply's
@@ -701,6 +751,7 @@ export class Session {
    */
   private retract(): void {
     this.log('retract (partial while claude, continuing)');
+    this.ack?.disarm();
     this.claude.interrupt();
     this.voice.interrupt();
     this.phone.event({ type: 'interrupted', retract: true });
@@ -730,6 +781,7 @@ export class Session {
   private endTurn(): Promise<void> {
     if (this.state === 'user') return Promise.resolve(); // nothing in flight
     this.disarm();
+    this.ack?.disarm();
     const t = this.turn;
     this.turn = this.blank();
     this.attached = []; // what was attached was this turn's, and the turn is over
@@ -775,7 +827,7 @@ export class Session {
       session_id: null, heard: '', clip: null, images: [], proposed: '', corrected: null, instruction: '',
       approval: null, said: '', speech_end_at: null, partial_first_at: null, partial_last_at: null, heard_at: null, corrected_at: null,
       ran_at: null, claude_start_at: null, claude_opens: null, claude_first_at: null, tts_sent_at: null,
-      voice_out_at: null, reply_in_at: null, voice_ms: 0, heard_ms: null, cost_usd: null,
+      voice_out_at: null, reply_in_at: null, voice_ms: 0, heard_ms: null, cost_usd: null, ack: null, ack_at: null,
     };
   }
 
@@ -807,9 +859,12 @@ export class Session {
     // buffer's worth of rounding between a byte count here and a frame count there.
     // A turn where the two agree adds nothing, so an ordinary line stays the line it
     // has always been and this one is only ever bad news.
+    // When "got it" went out, after the instruction was heard — the pause plus the
+    // timer's slack. Absent when none was said: off, or the reply came first.
+    const ack = t.ack_at ? `ack ${d(t.heard_at, t.ack_at)}  ` : '';
     const heard = t.heard_ms !== null && t.voice_ms - t.heard_ms > 250 ? ` (${(t.heard_ms / 1000).toFixed(1)}s heard)` : '';
     this.log(
-      `turn ${t.turn} end  stt ${d(t.speech_end_at, t.heard_at)}  final ${d(t.partial_last_at, t.heard_at)}  ${corrected}${held}` +
+      `turn ${t.turn} end  stt ${d(t.speech_end_at, t.heard_at)}  final ${d(t.partial_last_at, t.heard_at)}  ${corrected}${held}${ack}` +
       `${claude}  buffer ${d(t.claude_first_at, t.tts_sent_at)}  tts ${d(t.tts_sent_at, t.voice_out_at)}  ` +
       `→phone ${d(t.voice_out_at, t.reply_in_at)}  ${(t.voice_ms / 1000).toFixed(1)}s voice${heard}${cost}`,
     );

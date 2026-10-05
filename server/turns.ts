@@ -83,6 +83,10 @@ export interface Turn {
    *  session's bill is the sum of its turns here, and why an interrupted turn, whose
    *  result nothing listens for, leaves its cost in no line at all. */
   cost_usd: number | null;
+  /** The acknowledgement the phone was told to say once the pause had passed, and when
+   *  — see ack.ts. Null when none was: switched off, typed, or the reply came first. */
+  ack: string | null;
+  ack_at: number | null;
 }
 
 const file = () => state('turns.jsonl');

@@ -41,6 +41,10 @@ import { terms, type Correction } from './corrections.ts';
 
 export interface Ears {
   send(pcm: Buffer): void;
+  /** Whatever is said next is a new utterance, however soon: the JOIN window closes
+   *  now. For when something has happened that speech after it can only be an answer
+   *  to — the reply started playing — or when the last final was not the user at all. */
+  seal(): void;
   close(): void;
 }
 
@@ -70,7 +74,9 @@ export interface EarsCallbacks {
 const SILENCE_MS = 200;
 
 // A new utterance starting this soon after the last final continues it rather than
-// answering it. Derived, not chosen, from both ends of the window: the reply's first
+// answering it — the default for the pause window, which the phone may set (`joinMs`,
+// the "Denkpauze" setting) because how long a pause for thought lasts is a person's,
+// not a constant's. Derived, not chosen, from both ends of the window: the reply's first
 // sound reaches the listener no sooner than ~2.4s after a final (Claude ≥1s warm,
 // sentence buffer, voice ~0.75s, from the turn log), so speech heard to *start*
 // before then cannot be an answer to anything — and "heard to start" runs late,
@@ -78,8 +84,9 @@ const SILENCE_MS = 200;
 // MAX_LEAD_MS exists for). At 2000 that lag pushed real continuations over the line;
 // 3000 covers the lag and still ends before a reply can have been heard and reacted
 // to. A longer pause is not joined; the tail reaches Claude on its own, and Claude's
-// own transcript holds the head.
-const JOIN_MS = 3000;
+// own transcript holds the head. A window set longer than a reply takes to be heard
+// stays honest because session.ts seals it the moment reply audio goes out.
+export const JOIN_MS = 3000;
 
 // 16 kHz Int16 mono. The one conversion between "how many bytes have gone out" and
 // "where are we in the stream", and the reason a clip is a subtraction.
@@ -129,6 +136,7 @@ export async function openEars(
   model: string,
   cb: EarsCallbacks,
   corrections: Correction[] = [],
+  joinMs = JOIN_MS,
 ): Promise<Ears> {
   const log = cb.log ?? (() => {});
   let session: Session | null = null;
@@ -213,7 +221,7 @@ export async function openEars(
           // and held for its whole length, so a long tail cannot lose its head midway.
           if (!speaking) {
             speaking = true;
-            joined = Date.now() - finalAt <= JOIN_MS;
+            joined = Date.now() - finalAt <= joinMs;
             if (!joined) prefix = '';
             // A joined utterance keeps the head fragment's start, so the clip grows
             // with the text: each final's audio is the audio of the whole sentence so
@@ -262,6 +270,9 @@ export async function openEars(
       if (closed) return;
       if (session) forward(pcm);
       else backlog.push(pcm);
+    },
+    seal() {
+      finalAt = 0;
     },
     close() {
       if (closed) return;

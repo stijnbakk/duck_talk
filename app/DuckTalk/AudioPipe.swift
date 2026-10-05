@@ -161,6 +161,53 @@ final class AudioPipe {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
 
+    // MARK: The acknowledgement
+
+    /// "Got it" — told by the relay once the pause after an instruction has passed, so
+    /// it never cuts a sentence off (see server/ack.ts). Its own node on the same engine
+    /// and the same mixer as the reply, which is what puts it under the same echo
+    /// cancellation — and its own node so it is nothing the reply has to wait behind:
+    /// not counted in `queued` or `playedMs`, no `onDrained`, and cut the moment reply
+    /// audio arrives.
+    private let ackPlayer = AVAudioPlayerNode()
+
+    /// The clips, read from the bundle on first use and kept — after that, saying one
+    /// is a buffer handed to a node that is already running. Recorded by
+    /// `node server/ack.ts --write` in Claude's own voice; a phrase with no clip is
+    /// simply not said.
+    private var ackClips: [String: AVAudioPCMBuffer] = [:]
+
+    private func ackClip(_ slug: String) -> AVAudioPCMBuffer? {
+        if let clip = ackClips[slug] { return clip }
+        guard let url = Bundle.main.url(forResource: slug, withExtension: "wav"),
+              let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false),
+              file.processingFormat.sampleRate == speakerFormat.sampleRate,
+              file.processingFormat.channelCount == 1,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: buffer)) != nil else { return nil }
+        ackClips[slug] = buffer
+        return buffer
+    }
+
+    /// Say the acknowledgement, unless that would talk over someone. The relay only
+    /// knows what the transcript said; this side hears the room, and a voice in the last
+    /// moment means the next utterance is already under way — the relay will see it as
+    /// a new one, and "got it" in front of it would be talking over it. Returns why it
+    /// was not said, for the log.
+    func acknowledge(_ slug: String) -> String? {
+        guard output else { return "output off" }
+        guard Date().timeIntervalSince(spokeAt) > Self.quietBeforeAck else { return "voice on the mic" }
+        guard queued == 0 else { return "reply already playing" }
+        guard engine.isRunning, let clip = ackClip(slug) else { return "no clip for \(slug)" }
+        ackPlayer.stop()
+        ackPlayer.scheduleBuffer(clip, completionHandler: nil)
+        ackPlayer.play()
+        return nil
+    }
+
+    /// How recently a voice on the microphone stops the acknowledgement.
+    private static let quietBeforeAck: TimeInterval = 0.8
+
     /// The player belongs to the engine for the life of the pipe, not for the life of a
     /// run. Attached here rather than in `start`, because attachment is what makes a node
     /// addressable at all: detached, `stop()` and `play()` do not fail, they raise — and
@@ -171,6 +218,7 @@ final class AudioPipe {
     /// in any order, before or during a run.
     init() {
         engine.attach(player)
+        engine.attach(ackPlayer)
     }
 
     /// The transport, running — the one precondition a scheduled buffer has, and a node
@@ -224,6 +272,7 @@ final class AudioPipe {
     /// the only reason this is not simply the body of `start`.
     private func wire() throws {
         engine.connect(player, to: engine.mainMixerNode, format: speakerFormat)
+        engine.connect(ackPlayer, to: engine.mainMixerNode, format: speakerFormat)
 
         let input = engine.inputNode
         let hardwareFormat = input.outputFormat(forBus: 0)
@@ -320,6 +369,7 @@ final class AudioPipe {
         let was = engine.inputNode.outputFormat(forBus: 0).sampleRate
         engine.inputNode.removeTap(onBus: 0)
         engine.disconnectNodeOutput(player)
+        engine.disconnectNodeOutput(ackPlayer)
         var failed: String?
         do {
             try wire()
@@ -354,6 +404,8 @@ final class AudioPipe {
             for i in 0..<Int(frames) { out[i] = Float(samples[i]) / 32768 }
         }
         queued += 1
+        // The answer itself is here, so the acknowledgement has nothing left to say.
+        if ackPlayer.isPlaying { ackPlayer.stop() }
         let mine = epoch // the batch this buffer belongs to; see `drained`
         settle() // the reply owns the speaker from the moment audio exists to play
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
@@ -391,6 +443,7 @@ final class AudioPipe {
 
     func flush() {
         player.stop()
+        ackPlayer.stop()
         // Stopping fires the completion of every unplayed buffer, but the flush is
         // the truth right now: the speaker is dry because the turn was taken away.
         drained()
@@ -483,6 +536,7 @@ final class AudioPipe {
         waiting = false // fades the pad out with the session, if it was playing
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
+        ackPlayer.stop()
         engine.stop()
         // No setActive(false): deactivation belongs to whoever activated — the
         // system on a device (as the call ends), the Call stub in the simulator.
