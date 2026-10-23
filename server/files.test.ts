@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { ChangeBatcher, confined, fileFrame, watchingFromEnv, type FilesChanged } from './files.ts';
+import { ChangeBatcher, confined, fileFrame, listFrame, watchingFromEnv, type FilesChanged } from './files.ts';
 
 function vault() {
   const root = mkdtempSync(join(tmpdir(), 'files-test-'));
@@ -71,4 +71,18 @@ test('changes are batched, split into present and deleted, hidden ones dropped',
   assert.deepEqual(frames[0]!.paths, ['Canvas/A.canvas', 'Canvas/Pieces/B.canvas']);
   assert.deepEqual(frames[0]!.deleted, ['Canvas/Old.canvas']);
   b.stop();
+});
+
+test('file_list hashes every file under a folder, hidden ones and links out left out', () => {
+  const v = vault();
+  try {
+    mkdirSync(join(v.root, 'Canvas', 'Pieces'));
+    writeFileSync(join(v.root, 'Canvas', 'Pieces', 'E01.canvas'), '{}');
+    writeFileSync(join(v.root, 'Canvas', '.hidden'), 'x');
+    const list = listFrame(v.root, 'Canvas');
+    assert.deepEqual(list.files.map((f) => f.path).sort(), ['Canvas/Home.canvas', 'Canvas/Pieces/E01.canvas']);
+    assert.equal(list.files.find((f) => f.path === 'Canvas/Pieces/E01.canvas')!.sha1, createHash('sha1').update('{}').digest('hex'));
+    assert.equal(listFrame(v.root, '../').error, 'not allowed');
+    assert.equal(listFrame(v.root, '.obsidian').error, 'not allowed');
+  } finally { v.done(); }
 });

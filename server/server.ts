@@ -83,7 +83,7 @@ import { PROJECT, VERSION } from './paths.ts';
 import { all as prompts, isName, write as writePrompt } from './prompts.ts';
 import { reach } from './reach.ts';
 import { gateFromEnv, refusal } from './gate.ts';
-import { fileFrame, watchFiles, watchingFromEnv } from './files.ts';
+import { fileFrame, listFrame, watchFiles, watchingFromEnv } from './files.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8765);
 // Two jobs, two models: one Live session transcribes what you say, and a
@@ -185,6 +185,11 @@ wss.on('connection', (ws, req) => {
       // none of the state frames below follow it.
       if (f?.['type'] === 'file_get') {
         if (watchingFromEnv()) ws.send(JSON.stringify(fileFrame(PROJECT, f['path'])));
+        return;
+      }
+      // What a client that was away compares its copies against.
+      if (f?.['type'] === 'file_list') {
+        if (watchingFromEnv()) ws.send(JSON.stringify(listFrame(PROJECT, f['prefix'])));
         return;
       }
       if (f?.['type'] === 'correction_save') {

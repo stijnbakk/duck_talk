@@ -15,7 +15,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 export const MAX_FILE_BYTES = 5 * 1024 * 1024;
@@ -67,6 +67,36 @@ export function fileFrame(root: string, rel: unknown): FileFrame {
   if (st.size > MAX_FILE_BYTES) return { type: 'file', path, error: 'too large' };
   const bytes = readFileSync(abs);
   return { type: 'file', path, mtime: Math.round(st.mtimeMs), sha1: createHash('sha1').update(bytes).digest('hex'), data: bytes.toString('base64') };
+}
+
+export interface ListedFile { path: string; sha1: string; mtime: number }
+
+/**
+ * The answer to `file_list`: every file under the vault-relative folder `prefix` with its
+ * hash, so a client that was away can see which of its copies differ. Same confinement as
+ * `file_get`; at most `limit` files, files over 5 MB left out.
+ */
+export function listFrame(root: string, prefix: unknown, limit = 5000): { type: 'files'; prefix: string; files: ListedFile[]; error?: string } {
+  const p = typeof prefix === 'string' ? prefix.replace(/\/+$/, '') : '';
+  const dir = confined(root, p);
+  if (!dir) return { type: 'files', prefix: p, files: [], error: 'not allowed' };
+  const files: ListedFile[] = [];
+  const walk = (abs: string, rel: string) => {
+    let entries;
+    try { entries = readdirSync(abs, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (files.length >= limit || hidden(e.name)) continue;
+      const a = join(abs, e.name), r = `${rel}/${e.name}`;
+      if (e.isDirectory()) walk(a, r);
+      else if (e.isFile()) {
+        const st = statSync(a);
+        if (st.size > MAX_FILE_BYTES) continue;
+        files.push({ path: r, sha1: createHash('sha1').update(readFileSync(a)).digest('hex'), mtime: Math.round(st.mtimeMs) });
+      }
+    }
+  };
+  walk(dir, p);
+  return { type: 'files', prefix: p, files };
 }
 
 export interface FilesChanged {
