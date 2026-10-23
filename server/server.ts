@@ -82,6 +82,7 @@ import { watch, working } from './live.ts';
 import { VERSION } from './paths.ts';
 import { all as prompts, isName, write as writePrompt } from './prompts.ts';
 import { reach } from './reach.ts';
+import { gateFromEnv, refusal } from './gate.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8765);
 // Two jobs, two models: one Live session transcribes what you say, and a
@@ -98,16 +99,17 @@ if (!API_KEY) {
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 // Local hardening: whoever connects can switch Claude to `bypassPermissions`, so the
 // relay listens on loopback unless HOST says otherwise (Tailscale serve still reaches
-// it), and refuses any handshake carrying an Origin header — browsers always send one,
-// so a web page cannot drive Claude through ws://localhost. The iOS app sends none.
+// it), and the gate refuses browser Origins it was not told about and, when
+// RELAY_TOKEN is set, any socket without it (see gate.ts).
 const HOST = process.env['HOST'] ?? '127.0.0.1';
+const gate = gateFromEnv();
 const wss = new WebSocketServer({
   host: HOST,
   port: PORT,
   verifyClient: ({ req }: { req: import('node:http').IncomingMessage }) => {
-    if (!req.headers.origin) return true;
-    console.error(`refused a connection with Origin ${req.headers.origin}`);
-    return false;
+    const why = refusal(gate, req.headers.origin, req.url);
+    if (why) console.error(`refused a connection with ${why}`);
+    return !why;
   },
 });
 let nextId = 1;

@@ -29,7 +29,11 @@ the code, because installed by `npx` the code lives in a cache that gets wiped.
 Needs `GEMINI_API_KEY` in that folder's `.env` or in the shell, and Claude Code signed
 in — or `ANTHROPIC_API_KEY`, which bills the API instead. The relay's third startup
 line says which account will actually pay, asked of the CLI rather than guessed from
-the environment. `--port` and `--cwd` are the flags; `PORT` and `PROJECT_CWD` are the
+the environment. Two optional locks, both off by default (see `gate.ts`):
+`RELAY_TOKEN` makes every socket, `?data=1` included, carry `?token=<value>`, and
+`ALLOWED_ORIGINS` (comma-separated, e.g. `app://obsidian.md,capacitor://localhost`)
+lets those browser Origins in, where otherwise any handshake with an Origin is refused.
+`--port` and `--cwd` are the flags; `PORT` and `PROJECT_CWD` are the
 same two as environment variables. `STT_MODEL`, `VOICE_MODEL`, `CLAUDE_MODEL`,
 `CLAUDE_PERMISSION_MODE` (default `plan`) and `CLAUDE_EFFORT` override the rest — the
 last three say only where a session starts, since the phone moves any of them on the
