@@ -33,6 +33,12 @@ the environment. Two optional locks, both off by default (see `gate.ts`):
 `RELAY_TOKEN` makes every socket, `?data=1` included, carry `?token=<value>`, and
 `ALLOWED_ORIGINS` (comma-separated, e.g. `app://obsidian.md,capacitor://localhost`)
 lets those browser Origins in, where otherwise any handshake with an Origin is refused.
+`WATCH_FILES=1` (off by default, see `files.ts`) tells every socket which files in the
+served folder changed — `{"type":"files_changed","paths":[…],"deleted":[…],"at":ms}`,
+batched over 300ms, hidden folders left out — and answers `{"type":"file_get","path"}`
+on a data socket with `{"type":"file","path","mtime","sha1","data":<base64>}` (or
+`missing: true`, or `error`), for a client that keeps its own copy of the folder. Only
+vault-relative paths inside the folder, no dot folders, no symlinks out, at most 5 MB.
 `--port` and `--cwd` are the flags; `PORT` and `PROJECT_CWD` are the
 same two as environment variables. `STT_MODEL`, `VOICE_MODEL`, `CLAUDE_MODEL`,
 `CLAUDE_PERMISSION_MODE` (default `plan`) and `CLAUDE_EFFORT` override the rest — the

@@ -79,10 +79,11 @@ import { read as readClip } from './clips.ts';
 import { read as readImage } from './images.ts';
 import { load, remove, save } from './corrections.ts';
 import { watch, working } from './live.ts';
-import { VERSION } from './paths.ts';
+import { PROJECT, VERSION } from './paths.ts';
 import { all as prompts, isName, write as writePrompt } from './prompts.ts';
 import { reach } from './reach.ts';
 import { gateFromEnv, refusal } from './gate.ts';
+import { fileFrame, watchFiles, watchingFromEnv } from './files.ts';
 
 const PORT = Number(process.env['PORT'] ?? 8765);
 // Two jobs, two models: one Live session transcribes what you say, and a
@@ -134,6 +135,18 @@ watch(() => {
   }).catch((e) => console.error(`chat list push failed: ${e}`));
 });
 
+// Every socket open right now, voice and data alike: told when files in the served
+// folder change, if WATCH_FILES=1 (see files.ts). A client that keeps its own copy of
+// the folder — Margin on the iPad — fetches what changed with `file_get`.
+const allConnections = new Set<import('ws').WebSocket>();
+if (watchingFromEnv()) {
+  watchFiles(PROJECT, (frame) => {
+    const text = JSON.stringify(frame);
+    for (const ws of allConnections) if (ws.readyState === ws.OPEN) ws.send(text);
+  });
+  console.log(`  files        watching ${PROJECT}`);
+}
+
 wss.on('connection', (ws, req) => {
   const id = nextId++;
   const url = new URL(req.url ?? '/', 'ws://x');
@@ -151,6 +164,8 @@ wss.on('connection', (ws, req) => {
   const pauseMs = Number.isFinite(pause) && pause >= 1000 && pause <= 10_000 ? pause : undefined;
   const ack = url.searchParams.get('ack') === '1';
   const log = (msg: string) => console.log(`[${id}] ${msg}`);
+  allConnections.add(ws);
+  ws.on('close', () => allConnections.delete(ws));
   log(`open (${mode}${autocorrect ? ', autocorrect' : ''}${readback ? ', readback' : ''}${pauseMs ? `, pause ${pauseMs}ms` : ''}${ack ? ', ack' : ''}${resume ? `, resuming ${resume}` : ''})`);
 
   // `?data=1` edits what the relay owns and nothing else — no Gemini, no Claude — so
@@ -166,6 +181,12 @@ wss.on('connection', (ws, req) => {
     ws.on('message', async (raw, isBinary) => {
       if (isBinary) return;
       const f = parse(String(raw));
+      // A file the client asked for, answered on its own: it changes nothing here, so
+      // none of the state frames below follow it.
+      if (f?.['type'] === 'file_get') {
+        if (watchingFromEnv()) ws.send(JSON.stringify(fileFrame(PROJECT, f['path'])));
+        return;
+      }
       if (f?.['type'] === 'correction_save') {
         const at = typeof f['at'] === 'number' ? f['at'] : Date.now();
         const heard = String(f['heard'] ?? '').trim();
