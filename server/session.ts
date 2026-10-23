@@ -378,9 +378,13 @@ export class Session {
       // phone if it fails. Nothing else to keep in step.
       // ears.ts already logs the close and its code; what happens next is this
       // object's own state and not an observation, so it is not narrated twice.
-      onClosed: () => {
+      // A refusal (spent billing cap, bad key) closes the ears right after they open,
+      // and would otherwise look to the phone like a mic that hears nothing.
+      onClosed: (reason) => {
         if (this.closed) return;
         this.ears = null;
+        const refusal = earsRefusal(reason);
+        if (refusal) this.phone.event({ type: 'error', text: refusal });
       },
     }, this.corrections, this.pauseMs);
   }
@@ -882,4 +886,11 @@ function bareKeyword(instruction: string): Keyword | null {
 function same(a: string, b: string): boolean {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   return norm(a) === norm(b) && norm(a).length > 0;
+}
+
+/** The phone-facing text for a close that is Gemini refusing, not a routine hang-up. */
+export function earsRefusal(reason: string): string | null {
+  if (/spending cap|quota|billing|exceeded/i.test(reason)) return `Speech recognition is off: Gemini says ${reason.replace(/\.?$/, '.')} Typing still works.`;
+  if (/api key|permission|unauthori[sz]ed|forbidden/i.test(reason)) return `Speech recognition is off: Gemini refused the key (${reason}). Typing still works.`;
+  return null;
 }

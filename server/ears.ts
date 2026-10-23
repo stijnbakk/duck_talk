@@ -60,8 +60,9 @@ export interface EarsCallbacks {
   /** The server hung up — a session that hit Gemini's duration limit, or a dropped
    *  network. Never called for a close() of our own. The model offers no way around
    *  it (`sessionResumption` is ignored by the transcribe model — measured), so the
-   *  recovery is the caller's open path, run again. */
-  onClosed?(): void;
+   *  recovery is the caller's open path, run again. `reason` is Gemini's close text,
+   *  which names a refusal such as a spent billing cap. */
+  onClosed?(reason: string): void;
   log?(m: string): void;
 }
 
@@ -259,7 +260,7 @@ export async function openEars(
         closed = true;
         session = null;
         log(`ears closed: ${e.reason || e.code}`);
-        if (!mine) cb.onClosed?.();
+        if (!mine) cb.onClosed?.(e.reason || String(e.code));
       },
     },
   });
