@@ -9,6 +9,7 @@ duck_talk` runs. Each primitive runs alone:
 - `claude.ts` — Claude Code via the Agent SDK: one instruction → streamed text + tool calls + a session id to resume.
 - `voice.ts`  — Gemini text-to-speech, one request per sentence: Claude's text in → 24 kHz PCM out.
 - `session.ts`— the turn state machine wiring the three together, per phone connection.
+- `speech.ts` — `?mode=speech`: ears and voice without Claude, for a client with an agent of its own.
 - `chats.ts`  — the conversations Claude Code has in this project: list, read, fork, star, rename, delete. All of it the SDK's own session store, which is what `?resume=` replays.
 - `cli.ts`    — the entry point: the flags, the `.env`, and which folder to serve.
 - `paths.ts`  — where that folder puts everything, now that it is a choice.
@@ -101,6 +102,12 @@ Connect to `ws://<mac>:8765`. One `?mode=`: `direct` (default) runs each instruc
 at once, `review` holds it until it is approved — by an `approve` frame, or by saying
 "yes". Refusing one is not doing anything with it, so the only way to refuse is to say
 "no" or to hang up.
+`speech` has no Claude at all: ears and a voice for a client that brings its own agent
+(see `speech.ts`). Mic PCM up gives `user` frames, and the finished utterance
+(`partial: false`) arrives only once the pause window has passed with nobody
+continuing it, since there is nothing to retract it from; `{"type":"say","text"}` up
+reads `text` out, as `turn_start`, 24 kHz PCM, `turn_end`; speech heard while reading
+stops it with `interrupted`, as does `{"type":"stop"}`. `played` works as above.
 `?correct=1` and `?readback=1` are orthogonal to both. `?resume=<session id>` carries
 on a past conversation instead of starting one — any session Claude Code has in this
 project, including the ones you started in a terminal. A Claude session belongs to its

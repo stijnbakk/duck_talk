@@ -29,7 +29,8 @@
  * Claude and never Gemini — with nothing in the URL saying which kind it is.
  *
  * A session is in one `?mode=`: `direct` (default) runs each instruction at once,
- * `review` holds it for a yes/no/edit first. Orthogonal to both, `?correct=1` has a
+ * `review` holds it for a yes/no/edit first. `speech` has no Claude at all — ears and a
+ * voice for a client that brings its own agent; see speech.ts. Orthogonal to both, `?correct=1` has a
  * fast text model fix the instruction first, from the pairs a review-mode edit
  * taught (`.duck-talk/corrections.jsonl`). `?readback=1` also reads a held instruction aloud,
  * for deciding without looking at the screen. `?pause=<ms>` sets how long a pause may
@@ -73,6 +74,7 @@
 import { WebSocketServer } from 'ws';
 import { GoogleGenAI } from '@google/genai';
 import { Session, type Mode, type Phone } from './session.ts';
+import { SpeechSession, geminiParts } from './speech.ts';
 import { billingMode, capabilities } from './claude.ts';
 import { chat, chats, fork, remove as removeChat, rename, star } from './chats.ts';
 import { read as readClip } from './clips.ts';
@@ -166,7 +168,7 @@ wss.on('connection', (ws, req) => {
   const log = (msg: string) => console.log(`[${id}] ${msg}`);
   allConnections.add(ws);
   ws.on('close', () => allConnections.delete(ws));
-  log(`open (${mode}${autocorrect ? ', autocorrect' : ''}${readback ? ', readback' : ''}${pauseMs ? `, pause ${pauseMs}ms` : ''}${ack ? ', ack' : ''}${resume ? `, resuming ${resume}` : ''})`);
+  log(`open (${asked === 'speech' ? 'speech' : mode}${autocorrect ? ', autocorrect' : ''}${readback ? ', readback' : ''}${pauseMs ? `, pause ${pauseMs}ms` : ''}${ack ? ', ack' : ''}${resume ? `, resuming ${resume}` : ''})`);
 
   // `?data=1` edits what the relay owns and nothing else — no Gemini, no Claude — so
   // the phone can open those screens whether or not a session is live. Every message
@@ -278,6 +280,19 @@ wss.on('connection', (ws, req) => {
     pcm: (buf) => { if (ws.readyState === ws.OPEN) ws.send(buf); },
     event: (msg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg)); },
   };
+
+  // `?mode=speech`: ears and a voice for a client with an agent of its own — no Claude
+  // here at all. See speech.ts.
+  if (asked === 'speech') {
+    const speech = new SpeechSession(phone, geminiParts(ai, STT_MODEL, VOICE_MODEL), { pauseMs }, log);
+    ws.on('message', (data, isBinary) => {
+      if (isBinary) speech.send(data as Buffer);
+      else { const f = parse(String(data)); if (f) speech.frame(f); }
+    });
+    ws.on('close', () => { log('close'); speech.close(); });
+    return;
+  }
+
   const session = new Session(phone, ai, mode, { sttModel: STT_MODEL, voiceModel: VOICE_MODEL, autocorrect, readback, resume, pauseMs, ack }, log);
 
   ws.on('message', (data, isBinary) => {
