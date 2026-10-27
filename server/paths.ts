@@ -28,7 +28,9 @@ import { fileURLToPath } from 'node:url';
 /** The folder Claude works in: where you started the relay, unless told otherwise. */
 export const PROJECT = (process.env['PROJECT_CWD'] ?? process.cwd()).replace(/(.)\/+$/, '$1');
 
-const STATE = resolve(PROJECT, '.duck-talk');
+// DUCK_TALK_STATE moves it elsewhere: a project that is itself synced (an iCloud vault)
+// should not carry the relay's logs and clips to every device.
+const STATE = process.env['DUCK_TALK_STATE'] ? resolve(process.env['DUCK_TALK_STATE']) : resolve(PROJECT, '.duck-talk');
 
 /**
  * A path under the project's state directory.
